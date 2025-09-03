@@ -16,8 +16,8 @@ Known supported versions: 1.21.1, 1.21.4
 - Permission "bbrl.admin" to open, close, the votelobby, and to add and remove tracks from the selection of tracks.
 
 # Commands:
-/votejoin - Accessible to anyone, joins votelobby
-/voteleave - Accessible to anyone, leaves votelobby
-/votelobby <open|close> - Opens/Closes the votelobby, useful for during events
-/votetrack add <trackname> <laps> <pits> - Adds a track to the voting selection
-/votetrack remove <trackname> - Removes a track from the voting selection
+- /votejoin - Accessible to anyone, joins votelobby
+- /voteleave - Accessible to anyone, leaves votelobby
+- /votelobby <open|close> - Opens/Closes the votelobby, useful for during events
+- /votetrack add <trackname> <laps> <pits> - Adds a track to the voting selection
+- /votetrack remove <trackname> - Removes a track from the voting selection
