@@ -1,0 +1,31 @@
+name: BBRL-Lobby-System
+main: com.example.bbrl.Main
+version: 1.0
+api-version: 1.20
+depend:
+  - TimingSystem
+description: A lobby system made for the Builders and Boaters Racing Server.
+author: BoshyWashy and allied_galaxy7
+
+commands:
+  votejoin:
+    description: Join the voting lobby
+    usage: /votejoin
+    permission: bbrl.join
+
+  voteleave:
+    description: Leave the voting lobby
+    usage: /voteleave
+    permission: bbrl.join
+
+  vote:
+    description: Vote for a track
+    usage: /vote <track>
+    permission: bbrl.vote
+
+  votelobby:
+    description: Admin command to control voting
+    usage: /votelobby <open|close|start>
+    permission: bbrl.admin
+  race:
+    description: Race control proxy
