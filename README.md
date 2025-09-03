@@ -12,4 +12,3 @@ Lobby system for the Builders &amp; Boaters Racing League (BBRL) server
 - Specific tracks to be raced on listed in config with a set amount of laps and pits
 - Coordinates in config for where the voting area is
 - 8 minute maximum timer for each quickrace
-- Smooth race end system (May have bugs)
