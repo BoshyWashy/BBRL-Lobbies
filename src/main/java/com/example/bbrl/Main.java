@@ -14,6 +14,7 @@ import org.bukkit.command.Command;
 import org.bukkit.command.CommandExecutor;
 import org.bukkit.command.CommandSender;
 import org.bukkit.command.PluginCommand;
+import org.bukkit.command.TabCompleter;
 import org.bukkit.configuration.ConfigurationSection;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
@@ -50,8 +51,10 @@ public class Main extends JavaPlugin implements CommandExecutor, Listener {
     private ConfigurationSection trackSection;
     public int autoFinishTaskId = -1;
 
+    // Deferred race end when no one is online at the 8-minute mark
     private boolean pendingAutoEnd = false;
 
+    // Players temporarily opped by the plugin (chat/commands blocked during this window)
     private final Set<UUID> tempOpPlayers = new HashSet<>();
 
     @Override
@@ -72,8 +75,14 @@ public class Main extends JavaPlugin implements CommandExecutor, Listener {
         PluginCommand lobbyCmd = Objects.requireNonNull(getCommand("votelobby"));
         lobbyCmd.setExecutor(this);
 
+        // New: /votetrack add/remove
+        PluginCommand trackCmd = Objects.requireNonNull(getCommand("votetrack"));
+        trackCmd.setExecutor(this);
+        trackCmd.setTabCompleter(new VoteTrackTabCompleter());
+
         Bukkit.getPluginManager().registerEvents(this, this);
 
+        // Open voting at server start
         startVoting();
     }
 
@@ -86,6 +95,7 @@ public class Main extends JavaPlugin implements CommandExecutor, Listener {
     public boolean onCommand(CommandSender sender, Command cmd, String label, String[] args) {
         String name = cmd.getName().toLowerCase();
 
+        // /votejoin
         if (name.equals("votejoin")) {
             if (!(sender instanceof Player)) return true;
             Player p = (Player) sender;
@@ -99,6 +109,7 @@ public class Main extends JavaPlugin implements CommandExecutor, Listener {
                 teleportPlayerToLobby(p);
                 p.sendMessage(ChatColor.AQUA + "You joined the voting lobby.");
 
+                // scoreboard & bossbar
                 if (votingBoard != null) {
                     p.setScoreboard(votingBoard);
                 }
@@ -115,6 +126,7 @@ public class Main extends JavaPlugin implements CommandExecutor, Listener {
             return true;
         }
 
+        // /voteleave
         if (name.equals("voteleave")) {
             if (!(sender instanceof Player)) return true;
             Player p = (Player) sender;
@@ -130,6 +142,7 @@ public class Main extends JavaPlugin implements CommandExecutor, Listener {
             return true;
         }
 
+        // /vote <track>
         if (name.equals("vote")) {
             if (!(sender instanceof Player)) return true;
             Player p = (Player) sender;
@@ -146,6 +159,7 @@ public class Main extends JavaPlugin implements CommandExecutor, Listener {
                 return true;
             }
 
+            // case-insensitive track lookup
             String input = args[0];
             String matched = trackSection.getKeys(false).stream()
                     .filter(k -> k.equalsIgnoreCase(input))
@@ -164,10 +178,11 @@ public class Main extends JavaPlugin implements CommandExecutor, Listener {
                 return true;
             }
 
+            // remove old vote
             if (previous != null) {
                 votes.put(previous, votes.get(previous) - 1);
             }
-
+            // apply new vote
             int cnt = votes.getOrDefault(matched, 0) + 1;
             votes.put(matched, cnt);
             playerVotes.put(uuid, matched);
@@ -179,6 +194,7 @@ public class Main extends JavaPlugin implements CommandExecutor, Listener {
                             ChatColor.GREEN + matched
             );
 
+            // refresh sidebar
             votingObjective.unregister();
             votingObjective = votingBoard.registerNewObjective(
                     "LobbyVotes", "dummy", ChatColor.AQUA + "Live Votes"
@@ -200,6 +216,7 @@ public class Main extends JavaPlugin implements CommandExecutor, Listener {
             return true;
         }
 
+        // /votelobby <open|close|start>
         if (name.equals("votelobby")) {
             if (!sender.hasPermission("bbrl.admin")) {
                 sender.sendMessage(ChatColor.RED + "You don't have permission to run this command.");
@@ -227,6 +244,61 @@ public class Main extends JavaPlugin implements CommandExecutor, Listener {
             return true;
         }
 
+        // /votetrack <add|remove> ...
+        if (name.equals("votetrack")) {
+            if (!(sender instanceof Player p)) return true;
+            if (!p.isOp()) {
+                p.sendMessage(ChatColor.RED + "You don't have permission to run this command.");
+                return true;
+            }
+            if (args.length < 2) {
+                p.sendMessage(ChatColor.RED + "Usage: /votetrack <add|remove> ...");
+                return true;
+            }
+
+            if (args[0].equalsIgnoreCase("add")) {
+                if (args.length != 4) {
+                    p.sendMessage(ChatColor.RED + "Usage: /votetrack add <Name> <Laps> <Pits>");
+                    return true;
+                }
+                String nameArg = args[1];
+                int laps, pits;
+                try {
+                    laps = Integer.parseInt(args[2]);
+                    pits = Integer.parseInt(args[3]);
+                } catch (NumberFormatException ex) {
+                    p.sendMessage(ChatColor.RED + "Laps and Pits must be numbers.");
+                    return true;
+                }
+                getConfig().set("tracks." + nameArg + ".laps", laps);
+                getConfig().set("tracks." + nameArg + ".pits", pits);
+                saveConfig();
+                trackSection = getConfig().getConfigurationSection("tracks");
+                p.sendMessage(ChatColor.GREEN + "Track '" + nameArg + "' added with " + laps + " laps and " + pits + " pits.");
+                return true;
+            }
+
+            if (args[0].equalsIgnoreCase("remove")) {
+                if (args.length != 2) {
+                    p.sendMessage(ChatColor.RED + "Usage: /votetrack remove <Name>");
+                    return true;
+                }
+                String nameArg = args[1];
+                if (getConfig().contains("tracks." + nameArg)) {
+                    getConfig().set("tracks." + nameArg, null);
+                    saveConfig();
+                    trackSection = getConfig().getConfigurationSection("tracks");
+                    p.sendMessage(ChatColor.GREEN + "Track '" + nameArg + "' removed.");
+                } else {
+                    p.sendMessage(ChatColor.RED + "Track not found: " + nameArg);
+                }
+                return true;
+            }
+
+            p.sendMessage(ChatColor.RED + "Unknown subcommand. Use add/remove.");
+            return true;
+        }
+
         return false;
     }
 
@@ -234,17 +306,20 @@ public class Main extends JavaPlugin implements CommandExecutor, Listener {
         if (isVotingOpen) return;
         isVotingOpen = true;
 
+        // reset state
         votes.clear();
         playerVotes.clear();
         votingPlayers.clear();
         voteCountdown = getConfig().getInt("vote-duration", 60);
 
+        // prepare bossbar
         votingBar = Bukkit.createBossBar(
                 ChatColor.AQUA + "Voting ends in " + formatTime(voteCountdown),
                 BarColor.BLUE, BarStyle.SEGMENTED_10
         );
         votingBar.setProgress(1.0);
 
+        // prepare scoreboard
         ScoreboardManager mgr = Bukkit.getScoreboardManager();
         votingBoard = Objects.requireNonNull(mgr).getNewScoreboard();
         votingObjective = votingBoard.registerNewObjective(
@@ -261,6 +336,7 @@ public class Main extends JavaPlugin implements CommandExecutor, Listener {
         cancelTasks();
         tasksStarted = false;
 
+        // invite players
         TextComponent invite = new TextComponent(
                 ChatColor.AQUA + "-> Do /votejoin to vote for the next race! <-"
         );
@@ -348,6 +424,7 @@ public class Main extends JavaPlugin implements CommandExecutor, Listener {
     }
 
     private void finishVoting() {
+        // if no votes, close and reopen after 3 seconds (no countdown until someone joins)
         boolean anyVotesCast = votes.values().stream().anyMatch(v -> v > 0);
         if (!anyVotesCast) {
             broadcast(ChatColor.RED + "No votes cast. Restarting vote!");
@@ -356,6 +433,7 @@ public class Main extends JavaPlugin implements CommandExecutor, Listener {
             return;
         }
 
+        // find winner
         String winner = votes.entrySet().stream()
                 .max(Map.Entry.comparingByValue())
                 .map(Map.Entry::getKey)
@@ -371,6 +449,7 @@ public class Main extends JavaPlugin implements CommandExecutor, Listener {
         int pits = getConfig().getInt("tracks." + winner + ".pits");
         List<UUID> racers = new ArrayList<>(votingPlayers);
 
+        // now clear state
         cancelVoting();
 
         broadcast(
@@ -383,7 +462,7 @@ public class Main extends JavaPlugin implements CommandExecutor, Listener {
             Player starter = Bukkit.getPlayer(racers.get(0));
             if (starter != null && starter.isOnline()) {
                 boolean wasOp = starter.isOp();
-
+                // temp-op safety lock begin
                 tempOpPlayers.add(starter.getUniqueId());
                 starter.setOp(true);
                 Bukkit.dispatchCommand(
@@ -392,6 +471,7 @@ public class Main extends JavaPlugin implements CommandExecutor, Listener {
                 );
                 starter.setOp(wasOp);
                 tempOpPlayers.remove(starter.getUniqueId());
+                // temp-op safety lock end
 
                 new RaceStartHelper(this, starter, racers).start();
                 return;
@@ -414,6 +494,7 @@ public class Main extends JavaPlugin implements CommandExecutor, Listener {
         }
     }
 
+    // Auto-end pending race when the next player joins after an empty server at 8-minute mark
     @EventHandler
     public void onPlayerJoin(PlayerJoinEvent e) {
         if (pendingAutoEnd) {
@@ -458,6 +539,7 @@ public class Main extends JavaPlugin implements CommandExecutor, Listener {
         p.teleport(new Location(w, x, y, z, yaw, pitch));
     }
 
+    // Block chat while player is temporarily opped by the plugin
     @EventHandler
     public void onTempOpChat(AsyncPlayerChatEvent e) {
         if (tempOpPlayers.contains(e.getPlayer().getUniqueId())) {
@@ -466,6 +548,7 @@ public class Main extends JavaPlugin implements CommandExecutor, Listener {
         }
     }
 
+    // Block manual commands while player is temporarily opped by the plugin
     @EventHandler
     public void onTempOpCommand(PlayerCommandPreprocessEvent e) {
         if (tempOpPlayers.contains(e.getPlayer().getUniqueId())) {
@@ -508,8 +591,8 @@ public class Main extends JavaPlugin implements CommandExecutor, Listener {
                             Bukkit.getScheduler().cancelTask(taskRef.get());
 
                             // start race (temp-op safety)
-                            boolean wasOp = runner.isOp();
-                            if (runner.isOnline()) {
+                            if (runner != null && runner.isOnline()) {
+                                boolean wasOp = runner.isOp();
                                 if (plugin instanceof Main m) {
                                     m.tempOpPlayers.add(runner.getUniqueId());
                                 }
@@ -525,7 +608,7 @@ public class Main extends JavaPlugin implements CommandExecutor, Listener {
                             int finishId = Bukkit.getScheduler().scheduleSyncDelayedTask(
                                     plugin,
                                     () -> {
-                                        Player ender = runner.isOnline()
+                                        Player ender = (runner != null && runner.isOnline())
                                                 ? runner
                                                 : Bukkit.getOnlinePlayers().stream().findFirst().orElse(null);
                                         if (ender != null) {
@@ -569,5 +652,25 @@ public class Main extends JavaPlugin implements CommandExecutor, Listener {
     private static String formatTime(int totalSeconds) {
         int m = totalSeconds / 60, s = totalSeconds % 60;
         return String.format("%d:%02d", m, s);
+    }
+
+    // Inner tab-completer for /votetrack (remove autocompletes existing tracks)
+    private class VoteTrackTabCompleter implements TabCompleter {
+        @Override
+        public List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args) {
+            if (!(sender instanceof Player p) || !p.isOp()) return Collections.emptyList();
+            if (!command.getName().equalsIgnoreCase("votetrack")) return Collections.emptyList();
+
+            if (args.length == 1) {
+                return Arrays.asList("add", "remove");
+            }
+            if (args.length == 2 && args[0].equalsIgnoreCase("remove")) {
+                ConfigurationSection section = getConfig().getConfigurationSection("tracks");
+                if (section != null) {
+                    return new ArrayList<>(section.getKeys(false));
+                }
+            }
+            return Collections.emptyList();
+        }
     }
 }
