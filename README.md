@@ -1,6 +1,6 @@
 # BBRL-Lobbies
 Lobby system for the Builders & Boaters Racing League (BBRL) server
-Known supported versions: 1.21.1, 1.21.4
+- Known supported versions: 1.21.1, 1.21.4
 
 # How to install:
 - Requires the TimingSystem plugins by FrosthexABG
