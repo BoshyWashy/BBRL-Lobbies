@@ -1,76 +1,10 @@
 lobby:
-  world: "baot" # insert the world where you want players to be teleported to in
-  x: 50044.0
-  y: -1.0
-  z: 19.0
+  world: <world> # insert the world name where you want players to be teleported to in
+  x: # insert the x coordinate of where you want the players to be teleported to when voting
+  y: # insert the y coordinate of where you want the players to be teleported to when voting
+  z: # insert the z coordinate of where you want the players to be teleported to when voting
 
 tracks: # insert set tracks that can be voted for here
-  WinterValley:
-    laps: 5
-    pits: 1
-  BoshIsle:
-    laps: 5
-    pits: 1
-  MallardPark:
-    laps: 3
-    pits: 1
-  FrostbiteSpeedway:
-    laps: 3
-    pits: 1
-  YubiwaRing:
-    laps: 7
-    pits: 1
-  EndstoneCityCircuit:
-    laps: 5
-    pits: 1
-  ZeraokCircuitV2:
-    laps: 6
-    pits: 1
-  SunderlandSpeedway:
-    laps: 10
-    pits: 0
-  IceyArchipelago:
-    laps: 2
-    pits: 0
-  Iboughtapropertyinegypt:
-    laps: 4
-    pits: 1
-  SkydomeCircuit:
-    laps: 15
-    pits: 0
-  MaspalomasKarting:
-    laps: 7
-    pits: 0
-  theygiveyatheproperty:
-    laps: 11
-    pits: 0
-  Fish:
-    laps: 5
-    pits: 1
-  O2Racing:
-    laps: 10
-    pits: 2
-  HyphaeHighway:
-    laps: 4
-    pits: 1
-  BlockstopCircuit:
-    laps: 4
-    pits: 1
-  CircuitdelaBaguette:
-    laps: 3
-    pits: 1
-  NyliumNightway:
-    laps: 5
-    pits: 1
-  WaterwaySpeedway:
-    laps: 5
-    pits: 1
-  FlowerCoast:
-    laps: 4
-    pits: 1
-  WallTapValleyV2:
-    laps: 5
-    pits: 1
-  StraightLine:
-    laps: 1
-    pits: 0
+  <TrackName NoSpaces>:
+    laps: <Laps>
+    pits: <Pits>
