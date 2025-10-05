@@ -51,15 +51,17 @@ public class Main extends JavaPlugin implements CommandExecutor, Listener {
     private ConfigurationSection trackSection;
     public int autoFinishTaskId = -1;
 
-    // Deferred race end when no one is online at the 8-minute mark
     private boolean pendingAutoEnd = false;
 
-    // Deferred race start when nobody is online to run /race start
     private boolean pendingAutoStart = false;
     private PendingStart pendingStart = null;
 
-    // Players temporarily opped by the plugin (chat/commands blocked during this window)
     private final Set<UUID> tempOpPlayers = new HashSet<>();
+
+    private static final String PREFIX = "&7[&b&lRace Lobby&7] &r";
+    private static String colorize(String raw) {
+        return ChatColor.translateAlternateColorCodes('&', raw);
+    }
 
     @Override
     public void onEnable() {
@@ -79,14 +81,12 @@ public class Main extends JavaPlugin implements CommandExecutor, Listener {
         PluginCommand lobbyCmd = Objects.requireNonNull(getCommand("votelobby"));
         lobbyCmd.setExecutor(this);
 
-        // New: /votetrack add/remove
         PluginCommand trackCmd = Objects.requireNonNull(getCommand("votetrack"));
         trackCmd.setExecutor(this);
         trackCmd.setTabCompleter(new VoteTrackTabCompleter(this));
 
         Bukkit.getPluginManager().registerEvents(this, this);
 
-        // Open voting at server start
         startVoting();
     }
 
@@ -99,21 +99,19 @@ public class Main extends JavaPlugin implements CommandExecutor, Listener {
     public boolean onCommand(CommandSender sender, Command cmd, String label, String[] args) {
         String name = cmd.getName().toLowerCase();
 
-        // /votejoin
         if (name.equals("votejoin")) {
             if (!(sender instanceof Player)) return true;
             Player p = (Player) sender;
             if (!isVotingOpen) {
-                p.sendMessage(ChatColor.RED + "Voting isn't open yet.");
+                p.sendMessage(colorize(PREFIX + "&cVoting isn't open yet."));
                 return true;
             }
 
             boolean firstJoin = votingPlayers.isEmpty();
             if (votingPlayers.add(p.getUniqueId())) {
                 teleportPlayerToLobby(p);
-                p.sendMessage(ChatColor.AQUA + "You joined the voting lobby.");
+                p.sendMessage(colorize(PREFIX + "&bYou joined the voting lobby."));
 
-                // scoreboard & bossbar
                 if (votingBoard != null) {
                     p.setScoreboard(votingBoard);
                 }
@@ -125,17 +123,16 @@ public class Main extends JavaPlugin implements CommandExecutor, Listener {
                     startCountdownTasks();
                 }
             } else {
-                p.sendMessage(ChatColor.RED + "You're already in the voting lobby.");
+                p.sendMessage(colorize(PREFIX + "&cYou're already in the voting lobby."));
             }
             return true;
         }
 
-        // /voteleave
         if (name.equals("voteleave")) {
             if (!(sender instanceof Player)) return true;
             Player p = (Player) sender;
             if (votingPlayers.remove(p.getUniqueId())) {
-                p.sendMessage(ChatColor.RED + "You left the voting lobby.");
+                p.sendMessage(colorize(PREFIX + "&cYou left the voting lobby."));
                 if (votingBar != null) {
                     votingBar.removePlayer(p);
                 }
@@ -146,24 +143,22 @@ public class Main extends JavaPlugin implements CommandExecutor, Listener {
             return true;
         }
 
-        // /vote <track>
         if (name.equals("vote")) {
             if (!(sender instanceof Player)) return true;
             Player p = (Player) sender;
             if (!isVotingOpen) {
-                p.sendMessage(ChatColor.RED + "Voting isn't open right now.");
+                p.sendMessage(colorize(PREFIX + "&cVoting isn't open right now."));
                 return true;
             }
             if (!votingPlayers.contains(p.getUniqueId())) {
-                p.sendMessage(ChatColor.RED + "Join first with /votejoin.");
+                p.sendMessage(colorize(PREFIX + "&cJoin first with &b/votejoin&c."));
                 return true;
             }
             if (args.length != 1) {
-                p.sendMessage(ChatColor.RED + "Usage: /vote <track>");
+                p.sendMessage(colorize(PREFIX + "&cUsage: &b/vote <track>"));
                 return true;
             }
 
-            // case-insensitive track lookup
             String input = args[0];
             String matched = trackSection.getKeys(false).stream()
                     .filter(k -> k.equalsIgnoreCase(input))
@@ -171,37 +166,31 @@ public class Main extends JavaPlugin implements CommandExecutor, Listener {
                     .orElse(null);
 
             if (matched == null) {
-                p.sendMessage(ChatColor.RED + "This track isn't available for races.");
+                p.sendMessage(colorize(PREFIX + "&cThis track isn't available for races."));
                 return true;
             }
 
             UUID uuid = p.getUniqueId();
             String previous = playerVotes.get(uuid);
             if (matched.equals(previous)) {
-                p.sendMessage(ChatColor.RED + "You're already voting for " + matched);
+                p.sendMessage(colorize(PREFIX + "&cYou're already voting for &b" + matched));
                 return true;
             }
 
-            // remove old vote
             if (previous != null) {
                 votes.put(previous, votes.get(previous) - 1);
             }
-            // apply new vote
             int cnt = votes.getOrDefault(matched, 0) + 1;
             votes.put(matched, cnt);
             playerVotes.put(uuid, matched);
 
-            p.sendMessage(ChatColor.AQUA + "You voted for " + matched);
-            broadcast(
-                    ChatColor.AQUA + p.getName() +
-                            ChatColor.GREEN + " voted for " +
-                            ChatColor.GREEN + matched
-            );
+            p.sendMessage(colorize(PREFIX + "&bYou voted for &a" + matched));
+            broadcast(colorize(PREFIX + "&b" + p.getName() + "&a voted for &b" + matched));
 
             // refresh sidebar
             votingObjective.unregister();
             votingObjective = votingBoard.registerNewObjective(
-                    "LobbyVotes", "dummy", ChatColor.AQUA + "Live Votes"
+                    "LobbyVotes", "dummy", colorize("&bLive Votes")
             );
             votingObjective.setDisplaySlot(DisplaySlot.SIDEBAR);
 
@@ -220,49 +209,47 @@ public class Main extends JavaPlugin implements CommandExecutor, Listener {
             return true;
         }
 
-        // /votelobby <open|close|start>
         if (name.equals("votelobby")) {
             if (!sender.hasPermission("bbrl.admin")) {
-                sender.sendMessage(ChatColor.RED + "You don't have permission to run this command.");
+                sender.sendMessage(colorize(PREFIX + "&cYou don't have permission to run this command."));
                 return true;
             }
             if (args.length != 1) {
-                sender.sendMessage(ChatColor.RED + "Usage: /votelobby <open|close|start>");
+                sender.sendMessage(colorize(PREFIX + "&cUsage: &b/votelobby <open|close|start>"));
                 return true;
             }
             switch (args[0].toLowerCase()) {
                 case "open" -> {
                     startVoting();
-                    sender.sendMessage("Voting opened.");
+                    sender.sendMessage(colorize(PREFIX + "Voting opened."));
                 }
                 case "close" -> {
                     cancelVoting();
-                    sender.sendMessage("Voting closed.");
+                    sender.sendMessage(colorize(PREFIX + "Voting closed."));
                 }
                 case "start" -> {
                     finishVoting();
-                    sender.sendMessage("Force-started race.");
+                    sender.sendMessage(colorize(PREFIX + "Force-started race."));
                 }
-                default -> sender.sendMessage(ChatColor.RED + "Unknown subcommand.");
+                default -> sender.sendMessage(colorize(PREFIX + "&cUnknown subcommand."));
             }
             return true;
         }
 
-        // /votetrack <add|remove> ...
         if (name.equals("votetrack")) {
             if (!(sender instanceof Player p)) return true;
             if (!p.isOp()) {
-                p.sendMessage(ChatColor.RED + "You don't have permission to run this command.");
+                p.sendMessage(colorize(PREFIX + "&cYou don't have permission to run this command."));
                 return true;
             }
             if (args.length < 2) {
-                p.sendMessage(ChatColor.RED + "Usage: /votetrack <add|remove> ...");
+                p.sendMessage(colorize(PREFIX + "&cUsage: &b/votetrack <add|remove> ..."));
                 return true;
             }
 
             if (args[0].equalsIgnoreCase("add")) {
                 if (args.length != 4) {
-                    p.sendMessage(ChatColor.RED + "Usage: /votetrack add <Name> <Laps> <Pits>");
+                    p.sendMessage(colorize(PREFIX + "&cUsage: &b/votetrack add <Name> <Laps> <Pits>"));
                     return true;
                 }
                 String nameArg = args[1];
@@ -271,20 +258,20 @@ public class Main extends JavaPlugin implements CommandExecutor, Listener {
                     laps = Integer.parseInt(args[2]);
                     pits = Integer.parseInt(args[3]);
                 } catch (NumberFormatException ex) {
-                    p.sendMessage(ChatColor.RED + "Laps and Pits must be numbers.");
+                    p.sendMessage(colorize(PREFIX + "&cLaps and Pits must be numbers."));
                     return true;
                 }
                 getConfig().set("tracks." + nameArg + ".laps", laps);
                 getConfig().set("tracks." + nameArg + ".pits", pits);
                 saveConfig();
                 trackSection = getConfig().getConfigurationSection("tracks");
-                p.sendMessage(ChatColor.GREEN + "Track '" + nameArg + "' added with " + laps + " laps and " + pits + " pits.");
+                p.sendMessage(colorize(PREFIX + "&aTrack '&b" + nameArg + "&a' added with &b" + laps + " &alaps and &b" + pits + " &apits."));
                 return true;
             }
 
             if (args[0].equalsIgnoreCase("remove")) {
                 if (args.length != 2) {
-                    p.sendMessage(ChatColor.RED + "Usage: /votetrack remove <Name>");
+                    p.sendMessage(colorize(PREFIX + "&cUsage: &b/votetrack remove <Name>"));
                     return true;
                 }
                 String nameArg = args[1];
@@ -292,14 +279,14 @@ public class Main extends JavaPlugin implements CommandExecutor, Listener {
                     getConfig().set("tracks." + nameArg, null);
                     saveConfig();
                     trackSection = getConfig().getConfigurationSection("tracks");
-                    p.sendMessage(ChatColor.GREEN + "Track '" + nameArg + "' removed.");
+                    p.sendMessage(colorize(PREFIX + "&aTrack '&b" + nameArg + "&a' removed."));
                 } else {
-                    p.sendMessage(ChatColor.RED + "Track not found: " + nameArg);
+                    p.sendMessage(colorize(PREFIX + "&cTrack not found: &b" + nameArg));
                 }
                 return true;
             }
 
-            p.sendMessage(ChatColor.RED + "Unknown subcommand. Use add/remove.");
+            p.sendMessage(colorize(PREFIX + "&cUnknown subcommand. Use &badd&c/&bremove&c."));
             return true;
         }
 
@@ -310,24 +297,21 @@ public class Main extends JavaPlugin implements CommandExecutor, Listener {
         if (isVotingOpen) return;
         isVotingOpen = true;
 
-        // reset state
         votes.clear();
         playerVotes.clear();
         votingPlayers.clear();
         voteCountdown = getConfig().getInt("vote-duration", 60);
 
-        // prepare bossbar
         votingBar = Bukkit.createBossBar(
-                ChatColor.AQUA + "Voting ends in " + formatTime(voteCountdown),
+                colorize("&bVoting ends in " + formatTime(voteCountdown)),
                 BarColor.BLUE, BarStyle.SEGMENTED_10
         );
         votingBar.setProgress(1.0);
 
-        // prepare scoreboard
         ScoreboardManager mgr = Bukkit.getScoreboardManager();
         votingBoard = Objects.requireNonNull(mgr).getNewScoreboard();
         votingObjective = votingBoard.registerNewObjective(
-                "LobbyVotes", "dummy", ChatColor.AQUA + "Live Votes"
+                "LobbyVotes", "dummy", colorize("&bLive Votes")
         );
         votingObjective.setDisplaySlot(DisplaySlot.SIDEBAR);
 
@@ -340,10 +324,8 @@ public class Main extends JavaPlugin implements CommandExecutor, Listener {
         cancelTasks();
         tasksStarted = false;
 
-        // invite players
-                String raw = "&7[&b&lRace Lobby&7] &rUse &b&l/votejoin &rto join the voting lobby! &b&l<--";
-        TextComponent invite = new TextComponent(ChatColor.translateAlternateColorCodes('&', raw));
-        ;
+        String raw = PREFIX + "&rUse &b&l/votejoin &rto join the voting lobby! &b&l<--";
+        TextComponent invite = new TextComponent(colorize(raw));
         invite.setClickEvent(new ClickEvent(
                 ClickEvent.Action.RUN_COMMAND,
                 "/votejoin"
@@ -370,8 +352,7 @@ public class Main extends JavaPlugin implements CommandExecutor, Listener {
         double progress = (double) voteCountdown / getConfig().getInt("vote-duration", 60);
         votingBar.setProgress(progress);
         votingBar.setTitle(
-                ChatColor.AQUA +
-                        String.format("Voting ends in %d:%02d", voteCountdown / 60, voteCountdown % 60)
+                colorize("&b" + String.format("Voting ends in %d:%02d", voteCountdown / 60, voteCountdown % 60))
         );
 
         if (voteCountdown <= 0) {
@@ -381,9 +362,8 @@ public class Main extends JavaPlugin implements CommandExecutor, Listener {
 
     private void sendVoteReminder() {
         if (!isVotingOpen) return;
-        TextComponent reminder = new TextComponent(
-                ChatColor.AQUA + "-> Do /votejoin to vote for the next race! <-"
-        );
+        String raw = PREFIX + "&rUse &b&l/votejoin &rto join the voting lobby! &b&l<--";
+        TextComponent reminder = new TextComponent(colorize(raw));
         reminder.setClickEvent(new ClickEvent(
                 ClickEvent.Action.RUN_COMMAND,
                 "/votejoin"
@@ -428,23 +408,21 @@ public class Main extends JavaPlugin implements CommandExecutor, Listener {
     }
 
     private void finishVoting() {
-        // if no votes, close and reopen after 3 seconds (no countdown until someone joins)
         boolean anyVotesCast = votes.values().stream().anyMatch(v -> v > 0);
         if (!anyVotesCast) {
-            broadcast(ChatColor.RED + "No votes cast. Restarting vote!");
+            broadcast(colorize(PREFIX + "&cNo votes sent."));
             cancelVoting();
             Bukkit.getScheduler().runTaskLater(this, this::startVoting, 3 * 20L);
             return;
         }
 
-        // find winner
         String winner = votes.entrySet().stream()
                 .max(Map.Entry.comparingByValue())
                 .map(Map.Entry::getKey)
                 .orElse(null);
 
         if (winner == null) {
-            broadcast(ChatColor.RED + "Voting failed. Restarting vote!");
+            broadcast(colorize(PREFIX + "&cVoting failed."));
             startVoting();
             return;
         }
@@ -453,14 +431,9 @@ public class Main extends JavaPlugin implements CommandExecutor, Listener {
         int pits = getConfig().getInt("tracks." + winner + ".pits");
         List<UUID> racers = new ArrayList<>(votingPlayers);
 
-        // now clear state
         cancelVoting();
 
-        broadcast(
-                ChatColor.GOLD +
-                        "Voting ended! Winning track: " +
-                        ChatColor.GREEN + winner
-        );
+        broadcast(colorize(PREFIX + "&6Voting ended! Winning track: &a" + winner));
 
         if (!racers.isEmpty()) {
             Player starter = Bukkit.getPlayer(racers.get(0));
@@ -475,14 +448,13 @@ public class Main extends JavaPlugin implements CommandExecutor, Listener {
                 );
                 starter.setOp(wasOp);
                 tempOpPlayers.remove(starter.getUniqueId());
-                // temp-op safety lock end
 
                 new RaceStartHelper(this, starter, racers).start();
                 return;
             }
         }
 
-        broadcast(ChatColor.RED + "No one online to start the race. Restarting vote.");
+        broadcast(colorize(PREFIX + "&cNo one online to start the race. Restarting vote."));
         startVoting();
     }
 
@@ -498,8 +470,6 @@ public class Main extends JavaPlugin implements CommandExecutor, Listener {
         }
     }
 
-    // Auto-end pending race when the next player joins after an empty server at 8-minute mark
-    // Also handles pending auto-start when nobody was online to run /race start
     @EventHandler
     public void onPlayerJoin(PlayerJoinEvent e) {
         Player p = e.getPlayer();
@@ -518,7 +488,6 @@ public class Main extends JavaPlugin implements CommandExecutor, Listener {
         }
 
         if (pendingAutoStart && pendingStart != null) {
-            // when someone joins and a start is pending, let them start the race
             boolean wasOp = p.isOp();
             tempOpPlayers.add(p.getUniqueId());
             p.setOp(true);
@@ -526,7 +495,6 @@ public class Main extends JavaPlugin implements CommandExecutor, Listener {
             p.setOp(wasOp);
             tempOpPlayers.remove(p.getUniqueId());
 
-            // schedule auto-finish in 8 minutes (same behavior as RaceStartHelper)
             int finishId = Bukkit.getScheduler().scheduleSyncDelayedTask(
                     this,
                     () -> {
@@ -560,7 +528,7 @@ public class Main extends JavaPlugin implements CommandExecutor, Listener {
             Bukkit.getScheduler().cancelTask(autoFinishTaskId);
             autoFinishTaskId = -1;
         }
-        broadcast(ChatColor.AQUA + "Rejoin the voting lobby with /votejoin to start a new race!");
+        broadcast(colorize(PREFIX + "&rRejoin the voting lobby with &b&l/votejoin &rto start a new race! &b&l<--"));
         startVoting();
     }
 
@@ -582,21 +550,19 @@ public class Main extends JavaPlugin implements CommandExecutor, Listener {
         p.teleport(new Location(w, x, y, z, yaw, pitch));
     }
 
-    // Block chat while player is temporarily opped by the plugin
     @EventHandler
     public void onTempOpChat(AsyncPlayerChatEvent e) {
         if (tempOpPlayers.contains(e.getPlayer().getUniqueId())) {
             e.setCancelled(true);
-            e.getPlayer().sendMessage(ChatColor.RED + "Please wait...");
+            e.getPlayer().sendMessage(colorize(PREFIX + "&cPlease wait..."));
         }
     }
 
-    // Block manual commands while player is temporarily opped by the plugin
     @EventHandler
     public void onTempOpCommand(PlayerCommandPreprocessEvent e) {
         if (tempOpPlayers.contains(e.getPlayer().getUniqueId())) {
             e.setCancelled(true);
-            e.getPlayer().sendMessage(ChatColor.RED + "Please wait...");
+            e.getPlayer().sendMessage(colorize(PREFIX + "&cPlease wait..."));
         }
     }
 
@@ -613,7 +579,7 @@ public class Main extends JavaPlugin implements CommandExecutor, Listener {
 
         void start() {
             BossBar bar = Bukkit.createBossBar(
-                    ChatColor.AQUA + "Race starting in 0:40",
+                    colorize("&bRace starting in 0:40"),
                     BarColor.BLUE, BarStyle.SOLID
             );
             bar.setProgress(1.0);
@@ -633,8 +599,6 @@ public class Main extends JavaPlugin implements CommandExecutor, Listener {
                             bar.removeAll();
                             Bukkit.getScheduler().cancelTask(taskRef.get());
 
-                            // start race (temp-op safety)
-                            // If runner is offline, try to find another online racer to run /race start
                             Player starterToUse = null;
                             if (runner != null && runner.isOnline()) {
                                 starterToUse = runner;
@@ -662,7 +626,6 @@ public class Main extends JavaPlugin implements CommandExecutor, Listener {
                                     m.tempOpPlayers.remove(finalStarter.getUniqueId());
                                 }
 
-                                // schedule auto-finish in 8 minutes
                                 int finishId = Bukkit.getScheduler().scheduleSyncDelayedTask(
                                         plugin,
                                         () -> {
@@ -682,7 +645,6 @@ public class Main extends JavaPlugin implements CommandExecutor, Listener {
                                                 }
                                                 ((Main) plugin).startVoting();
                                             } else {
-                                                // No one online: defer ending until next join
                                                 if (plugin instanceof Main m) {
                                                     m.pendingAutoEnd = true;
                                                 }
@@ -694,7 +656,6 @@ public class Main extends JavaPlugin implements CommandExecutor, Listener {
                                     m.autoFinishTaskId = finishId;
                                 }
                             } else {
-                                // No one online to run /race start: defer starting until someone joins
                                 if (plugin instanceof Main m) {
                                     m.pendingAutoStart = true;
                                     m.pendingStart = new PendingStart(new ArrayList<>(racers));
@@ -703,8 +664,7 @@ public class Main extends JavaPlugin implements CommandExecutor, Listener {
                         } else {
                             bar.setProgress((double) t / 40.0);
                             bar.setTitle(
-                                    ChatColor.AQUA +
-                                            String.format("Race starting in %d:%02d", t / 60, t % 60)
+                                    colorize("&b" + String.format("Race starting in %d:%02d", t / 60, t % 60))
                             );
                         }
                     },
@@ -719,7 +679,6 @@ public class Main extends JavaPlugin implements CommandExecutor, Listener {
         return String.format("%d:%02d", m, s);
     }
 
-    // Inner tab-completer for /votetrack (remove autocompletes existing tracks)
     private class VoteTrackTabCompleter implements TabCompleter {
         private final Main pluginRef;
 
@@ -752,7 +711,6 @@ public class Main extends JavaPlugin implements CommandExecutor, Listener {
         }
     }
 
-    // TabCompleter used for /vote (keeps behavior consistent and enables auto-complete when unique)
     public static class VoteTabCompleter implements TabCompleter {
         private final Main plugin;
 
@@ -779,7 +737,6 @@ public class Main extends JavaPlugin implements CommandExecutor, Listener {
         }
     }
 
-    // Simple holder for pending start state (we only need racers list because race create already happened)
     private static class PendingStart {
         final List<UUID> racers;
         PendingStart(List<UUID> racers) { this.racers = racers; }
