@@ -54,6 +54,10 @@ public class Main extends JavaPlugin implements CommandExecutor, Listener {
     // Deferred race end when no one is online at the 8-minute mark
     private boolean pendingAutoEnd = false;
 
+    // Deferred race start when nobody is online to run /race start
+    private boolean pendingAutoStart = false;
+    private PendingStart pendingStart = null;
+
     // Players temporarily opped by the plugin (chat/commands blocked during this window)
     private final Set<UUID> tempOpPlayers = new HashSet<>();
 
@@ -78,7 +82,7 @@ public class Main extends JavaPlugin implements CommandExecutor, Listener {
         // New: /votetrack add/remove
         PluginCommand trackCmd = Objects.requireNonNull(getCommand("votetrack"));
         trackCmd.setExecutor(this);
-        trackCmd.setTabCompleter(new VoteTrackTabCompleter());
+        trackCmd.setTabCompleter(new VoteTrackTabCompleter(this));
 
         Bukkit.getPluginManager().registerEvents(this, this);
 
@@ -495,10 +499,12 @@ public class Main extends JavaPlugin implements CommandExecutor, Listener {
     }
 
     // Auto-end pending race when the next player joins after an empty server at 8-minute mark
+    // Also handles pending auto-start when nobody was online to run /race start
     @EventHandler
     public void onPlayerJoin(PlayerJoinEvent e) {
+        Player p = e.getPlayer();
+
         if (pendingAutoEnd) {
-            Player p = e.getPlayer();
             boolean wasOp = p.isOp();
             tempOpPlayers.add(p.getUniqueId());
             p.setOp(true);
@@ -508,6 +514,43 @@ public class Main extends JavaPlugin implements CommandExecutor, Listener {
 
             pendingAutoEnd = false;
             startVoting();
+            return;
+        }
+
+        if (pendingAutoStart && pendingStart != null) {
+            // when someone joins and a start is pending, let them start the race
+            boolean wasOp = p.isOp();
+            tempOpPlayers.add(p.getUniqueId());
+            p.setOp(true);
+            Bukkit.dispatchCommand(p, "race start");
+            p.setOp(wasOp);
+            tempOpPlayers.remove(p.getUniqueId());
+
+            // schedule auto-finish in 8 minutes (same behavior as RaceStartHelper)
+            int finishId = Bukkit.getScheduler().scheduleSyncDelayedTask(
+                    this,
+                    () -> {
+                        Player ender = p.isOnline()
+                                ? p
+                                : Bukkit.getOnlinePlayers().stream().findFirst().orElse(null);
+                        if (ender != null) {
+                            boolean wasOp2 = ender.isOp();
+                            tempOpPlayers.add(ender.getUniqueId());
+                            ender.setOp(true);
+                            Bukkit.dispatchCommand(ender, "race end");
+                            ender.setOp(wasOp2);
+                            tempOpPlayers.remove(ender.getUniqueId());
+                            startVoting();
+                        } else {
+                            pendingAutoEnd = true;
+                        }
+                    },
+                    8 * 60 * 20L
+            );
+            autoFinishTaskId = finishId;
+
+            pendingAutoStart = false;
+            pendingStart = null;
         }
     }
 
@@ -591,49 +634,71 @@ public class Main extends JavaPlugin implements CommandExecutor, Listener {
                             Bukkit.getScheduler().cancelTask(taskRef.get());
 
                             // start race (temp-op safety)
+                            // If runner is offline, try to find another online racer to run /race start
+                            Player starterToUse = null;
                             if (runner != null && runner.isOnline()) {
-                                boolean wasOp = runner.isOp();
-                                if (plugin instanceof Main m) {
-                                    m.tempOpPlayers.add(runner.getUniqueId());
-                                }
-                                runner.setOp(true);
-                                Bukkit.dispatchCommand(runner, "race start");
-                                runner.setOp(wasOp);
-                                if (plugin instanceof Main m) {
-                                    m.tempOpPlayers.remove(runner.getUniqueId());
+                                starterToUse = runner;
+                            } else {
+                                for (UUID u : racers) {
+                                    Player p = Bukkit.getPlayer(u);
+                                    if (p != null && p.isOnline()) {
+                                        starterToUse = p;
+                                        break;
+                                    }
                                 }
                             }
 
-                            // schedule auto-finish in 8 minutes
-                            int finishId = Bukkit.getScheduler().scheduleSyncDelayedTask(
-                                    plugin,
-                                    () -> {
-                                        Player ender = (runner != null && runner.isOnline())
-                                                ? runner
-                                                : Bukkit.getOnlinePlayers().stream().findFirst().orElse(null);
-                                        if (ender != null) {
-                                            boolean wasOp2 = ender.isOp();
-                                            if (plugin instanceof Main m) {
-                                                m.tempOpPlayers.add(ender.getUniqueId());
+                            final Player finalStarter = starterToUse;
+
+                            if (finalStarter != null) {
+                                boolean wasOp = finalStarter.isOp();
+                                if (plugin instanceof Main m) {
+                                    m.tempOpPlayers.add(finalStarter.getUniqueId());
+                                }
+                                finalStarter.setOp(true);
+                                Bukkit.dispatchCommand(finalStarter, "race start");
+                                finalStarter.setOp(wasOp);
+                                if (plugin instanceof Main m) {
+                                    m.tempOpPlayers.remove(finalStarter.getUniqueId());
+                                }
+
+                                // schedule auto-finish in 8 minutes
+                                int finishId = Bukkit.getScheduler().scheduleSyncDelayedTask(
+                                        plugin,
+                                        () -> {
+                                            Player ender = finalStarter.isOnline()
+                                                    ? finalStarter
+                                                    : Bukkit.getOnlinePlayers().stream().findFirst().orElse(null);
+                                            if (ender != null) {
+                                                boolean wasOp2 = ender.isOp();
+                                                if (plugin instanceof Main m) {
+                                                    m.tempOpPlayers.add(ender.getUniqueId());
+                                                }
+                                                ender.setOp(true);
+                                                Bukkit.dispatchCommand(ender, "race end");
+                                                ender.setOp(wasOp2);
+                                                if (plugin instanceof Main m) {
+                                                    m.tempOpPlayers.remove(ender.getUniqueId());
+                                                }
+                                                ((Main) plugin).startVoting();
+                                            } else {
+                                                // No one online: defer ending until next join
+                                                if (plugin instanceof Main m) {
+                                                    m.pendingAutoEnd = true;
+                                                }
                                             }
-                                            ender.setOp(true);
-                                            Bukkit.dispatchCommand(ender, "race end");
-                                            ender.setOp(wasOp2);
-                                            if (plugin instanceof Main m) {
-                                                m.tempOpPlayers.remove(ender.getUniqueId());
-                                            }
-                                            ((Main) plugin).startVoting();
-                                        } else {
-                                            // No one online: defer ending until next join
-                                            if (plugin instanceof Main m) {
-                                                m.pendingAutoEnd = true;
-                                            }
-                                        }
-                                    },
-                                    8 * 60 * 20L
-                            );
-                            if (plugin instanceof Main m) {
-                                m.autoFinishTaskId = finishId;
+                                        },
+                                        8 * 60 * 20L
+                                );
+                                if (plugin instanceof Main m) {
+                                    m.autoFinishTaskId = finishId;
+                                }
+                            } else {
+                                // No one online to run /race start: defer starting until someone joins
+                                if (plugin instanceof Main m) {
+                                    m.pendingAutoStart = true;
+                                    m.pendingStart = new PendingStart(new ArrayList<>(racers));
+                                }
                             }
                         } else {
                             bar.setProgress((double) t / 40.0);
@@ -656,6 +721,12 @@ public class Main extends JavaPlugin implements CommandExecutor, Listener {
 
     // Inner tab-completer for /votetrack (remove autocompletes existing tracks)
     private class VoteTrackTabCompleter implements TabCompleter {
+        private final Main pluginRef;
+
+        VoteTrackTabCompleter(Main plugin) {
+            this.pluginRef = plugin;
+        }
+
         @Override
         public List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args) {
             if (!(sender instanceof Player p) || !p.isOp()) return Collections.emptyList();
@@ -665,12 +736,52 @@ public class Main extends JavaPlugin implements CommandExecutor, Listener {
                 return Arrays.asList("add", "remove");
             }
             if (args.length == 2 && args[0].equalsIgnoreCase("remove")) {
-                ConfigurationSection section = getConfig().getConfigurationSection("tracks");
+                ConfigurationSection section = pluginRef.getConfig().getConfigurationSection("tracks");
                 if (section != null) {
-                    return new ArrayList<>(section.getKeys(false));
+                    String typed = args[1].toLowerCase();
+                    List<String> matches = new ArrayList<>();
+                    for (String track : section.getKeys(false)) {
+                        if (track.toLowerCase().startsWith(typed)) {
+                            matches.add(track);
+                        }
+                    }
+                    return matches;
                 }
             }
             return Collections.emptyList();
         }
+    }
+
+    // TabCompleter used for /vote (keeps behavior consistent and enables auto-complete when unique)
+    public static class VoteTabCompleter implements TabCompleter {
+        private final Main plugin;
+
+        public VoteTabCompleter(Main plugin) {
+            this.plugin = plugin;
+        }
+
+        @Override
+        public List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args) {
+            if (!(sender instanceof Player)) return Collections.emptyList();
+            if (args.length == 1) {
+                ConfigurationSection section = plugin.getConfig().getConfigurationSection("tracks");
+                if (section == null) return Collections.emptyList();
+                String typed = args[0].toLowerCase();
+                List<String> matches = new ArrayList<>();
+                for (String track : section.getKeys(false)) {
+                    if (track.toLowerCase().startsWith(typed)) {
+                        matches.add(track);
+                    }
+                }
+                return matches;
+            }
+            return Collections.emptyList();
+        }
+    }
+
+    // Simple holder for pending start state (we only need racers list because race create already happened)
+    private static class PendingStart {
+        final List<UUID> racers;
+        PendingStart(List<UUID> racers) { this.racers = racers; }
     }
 }
