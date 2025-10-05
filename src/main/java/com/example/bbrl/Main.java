@@ -341,9 +341,9 @@ public class Main extends JavaPlugin implements CommandExecutor, Listener {
         tasksStarted = false;
 
         // invite players
-        TextComponent invite = new TextComponent(
-                ChatColor.AQUA + "-> Do /votejoin to vote for the next race! <-"
-        );
+                String raw = "&7[&b&lRace Lobby&7] &rUse &b&l/votejoin &rto join the voting lobby! &b&l<--";
+        TextComponent invite = new TextComponent(ChatColor.translateAlternateColorCodes('&', raw));
+        ;
         invite.setClickEvent(new ClickEvent(
                 ClickEvent.Action.RUN_COMMAND,
                 "/votejoin"
