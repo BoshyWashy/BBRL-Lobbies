@@ -184,7 +184,6 @@ public class Main extends JavaPlugin implements CommandExecutor, Listener {
             votes.put(matched, cnt);
             playerVotes.put(uuid, matched);
 
-            p.sendMessage(colorize(PREFIX + "&bYou voted for &a" + matched));
             broadcast(colorize(PREFIX + "&b" + p.getName() + "&a voted for &b" + matched));
 
             // refresh sidebar
@@ -410,7 +409,7 @@ public class Main extends JavaPlugin implements CommandExecutor, Listener {
     private void finishVoting() {
         boolean anyVotesCast = votes.values().stream().anyMatch(v -> v > 0);
         if (!anyVotesCast) {
-            broadcast(colorize(PREFIX + "&cNo votes sent."));
+            broadcast(colorize(PREFIX + "&cVoting failed."));
             cancelVoting();
             Bukkit.getScheduler().runTaskLater(this, this::startVoting, 3 * 20L);
             return;
@@ -454,7 +453,7 @@ public class Main extends JavaPlugin implements CommandExecutor, Listener {
             }
         }
 
-        broadcast(colorize(PREFIX + "&cNo one online to start the race. Restarting vote."));
+        broadcast(colorize(PREFIX + "&cVoting failed."));
         startVoting();
     }
 
