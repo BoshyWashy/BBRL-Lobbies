@@ -34,6 +34,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 public class Main extends JavaPlugin implements CommandExecutor, Listener {
 
+    /* ===================  ORIGINAL FIELDS  =================== */
     private final Set<UUID> votingPlayers = new LinkedHashSet<>();
     private final Map<String, Integer> votes = new LinkedHashMap<>();
     private final Map<UUID, String> playerVotes = new HashMap<>();
@@ -52,21 +53,38 @@ public class Main extends JavaPlugin implements CommandExecutor, Listener {
     public int autoFinishTaskId = -1;
 
     private boolean pendingAutoEnd = false;
-
     private boolean pendingAutoStart = false;
     private PendingStart pendingStart = null;
-
     private final Set<UUID> tempOpPlayers = new HashSet<>();
 
+    /* ===================  NEW FIELDS  =================== */
+    // cooldown per player (ticks)
+    private int voteCooldownTicks;
+    private final Map<UUID, Long> lastVoteTime = new HashMap<>();
+
+    // recent track memory
+    private final List<String> recentTracks = new ArrayList<>();
+    private int recentTrackMemory;
+
+    // race duration
+    private int raceDurationMinutes;
+
+    /* ==================================================== */
     private static final String PREFIX = "&7[&b&lRace Lobby&7] &r";
     private static String colorize(String raw) {
         return ChatColor.translateAlternateColorCodes('&', raw);
     }
 
+    /* ==================================================== */
     @Override
     public void onEnable() {
         saveDefaultConfig();
         trackSection = getConfig().getConfigurationSection("tracks");
+
+        /* --------------  LOAD NEW CONFIG  -------------- */
+        voteCooldownTicks = getConfig().getInt("vote-cooldown-seconds", 3) * 20;
+        recentTrackMemory = getConfig().getInt("recent-track-memory", 2);
+        raceDurationMinutes = getConfig().getInt("race-duration-minutes", 8);
 
         PluginCommand joinCmd = Objects.requireNonNull(getCommand("votejoin"));
         joinCmd.setExecutor(this);
@@ -87,7 +105,7 @@ public class Main extends JavaPlugin implements CommandExecutor, Listener {
 
         Bukkit.getPluginManager().registerEvents(this, this);
 
-        startVoting();
+        startVoting();   // first open – broadcasts
     }
 
     @Override
@@ -95,10 +113,14 @@ public class Main extends JavaPlugin implements CommandExecutor, Listener {
         cancelVoting();
     }
 
+    /* ==========================================================
+       COMMAND PROCESSING
+       ========================================================== */
     @Override
     public boolean onCommand(CommandSender sender, Command cmd, String label, String[] args) {
         String name = cmd.getName().toLowerCase();
 
+        /* ---------------  votejoin  --------------- */
         if (name.equals("votejoin")) {
             if (!(sender instanceof Player)) return true;
             Player p = (Player) sender;
@@ -112,37 +134,29 @@ public class Main extends JavaPlugin implements CommandExecutor, Listener {
                 teleportPlayerToLobby(p);
                 p.sendMessage(colorize(PREFIX + "&bYou joined the voting lobby."));
 
-                if (votingBoard != null) {
-                    p.setScoreboard(votingBoard);
-                }
-                if (votingBar != null) {
-                    votingBar.addPlayer(p);
-                }
+                if (votingBoard != null) p.setScoreboard(votingBoard);
+                if (votingBar != null) votingBar.addPlayer(p);
 
-                if (firstJoin) {
-                    startCountdownTasks();
-                }
+                if (firstJoin) startCountdownTasks();
             } else {
                 p.sendMessage(colorize(PREFIX + "&cYou're already in the voting lobby."));
             }
             return true;
         }
 
+        /* ---------------  voteleave  --------------- */
         if (name.equals("voteleave")) {
             if (!(sender instanceof Player)) return true;
             Player p = (Player) sender;
             if (votingPlayers.remove(p.getUniqueId())) {
                 p.sendMessage(colorize(PREFIX + "&cYou left the voting lobby."));
-                if (votingBar != null) {
-                    votingBar.removePlayer(p);
-                }
-                p.setScoreboard(
-                        Bukkit.getScoreboardManager().getMainScoreboard()
-                );
+                if (votingBar != null) votingBar.removePlayer(p);
+                p.setScoreboard(Bukkit.getScoreboardManager().getMainScoreboard());
             }
             return true;
         }
 
+        /* ---------------  vote  --------------- */
         if (name.equals("vote")) {
             if (!(sender instanceof Player)) return true;
             Player p = (Player) sender;
@@ -159,14 +173,28 @@ public class Main extends JavaPlugin implements CommandExecutor, Listener {
                 return true;
             }
 
+            /* --------------  COOLDOWN CHECK  -------------- */
+            long now = System.currentTimeMillis();
+            Long last = lastVoteTime.get(p.getUniqueId());
+            if (last != null && now - last < voteCooldownTicks * 50L) {
+                p.sendMessage(colorize(PREFIX + "&cPlease wait before voting again."));
+                return true;
+            }
+
             String input = args[0];
             String matched = trackSection.getKeys(false).stream()
                     .filter(k -> k.equalsIgnoreCase(input))
-                    .findFirst()
-                    .orElse(null);
+                    .findFirst().orElse(null);
 
             if (matched == null) {
                 p.sendMessage(colorize(PREFIX + "&cThis track isn't available for races."));
+                return true;
+            }
+
+            /* --------------  RECENT-TRACK BLOCK  -------------- */
+            if (recentTracks.contains(matched.toLowerCase(Locale.ROOT))) {
+                p.sendMessage(colorize(PREFIX + "&cSorry, this track was voted on within the last " +
+                        recentTrackMemory + " race(s)."));
                 return true;
             }
 
@@ -183,6 +211,7 @@ public class Main extends JavaPlugin implements CommandExecutor, Listener {
             int cnt = votes.getOrDefault(matched, 0) + 1;
             votes.put(matched, cnt);
             playerVotes.put(uuid, matched);
+            lastVoteTime.put(uuid, now);          // record time
 
             broadcast(colorize(PREFIX + "&b" + p.getName() + "&a voted for &b" + matched));
 
@@ -193,8 +222,7 @@ public class Main extends JavaPlugin implements CommandExecutor, Listener {
             );
             votingObjective.setDisplaySlot(DisplaySlot.SIDEBAR);
 
-            int max = votes.values().stream()
-                    .max(Integer::compareTo).orElse(0);
+            int max = votes.values().stream().max(Integer::compareTo).orElse(0);
             votes.forEach((track, count) -> {
                 if (count > 0) {
                     String entry = (count == max
@@ -204,23 +232,27 @@ public class Main extends JavaPlugin implements CommandExecutor, Listener {
                     votingObjective.getScore(entry).setScore(count);
                 }
             });
-
             return true;
         }
 
+        /* ---------------  votelobby  --------------- */
         if (name.equals("votelobby")) {
             if (!sender.hasPermission("bbrl.admin")) {
                 sender.sendMessage(colorize(PREFIX + "&cYou don't have permission to run this command."));
                 return true;
             }
             if (args.length != 1) {
-                sender.sendMessage(colorize(PREFIX + "&cUsage: &b/votelobby <open|close|start>"));
+                sender.sendMessage(colorize(PREFIX + "&cUsage: &b/votelobby <open|close|start|reopen>"));
                 return true;
             }
             switch (args[0].toLowerCase()) {
                 case "open" -> {
-                    startVoting();
+                    startVoting();               // broadcasts
                     sender.sendMessage(colorize(PREFIX + "Voting opened."));
+                }
+                case "reopen" -> {
+                    startVotingSilent();         // silent
+                    sender.sendMessage(colorize(PREFIX + "Voting reopened silently."));
                 }
                 case "close" -> {
                     cancelVoting();
@@ -235,6 +267,7 @@ public class Main extends JavaPlugin implements CommandExecutor, Listener {
             return true;
         }
 
+        /* ---------------  votetrack  --------------- */
         if (name.equals("votetrack")) {
             if (!(sender instanceof Player p)) return true;
             if (!p.isOp()) {
@@ -292,6 +325,11 @@ public class Main extends JavaPlugin implements CommandExecutor, Listener {
         return false;
     }
 
+    /* ==========================================================
+       VOTING MANAGEMENT
+       ========================================================== */
+
+    // ORIGINAL – broadcasts invite
     public void startVoting() {
         if (isVotingOpen) return;
         isVotingOpen = true;
@@ -323,6 +361,7 @@ public class Main extends JavaPlugin implements CommandExecutor, Listener {
         cancelTasks();
         tasksStarted = false;
 
+        /* --------------  BROADCAST INVITE  -------------- */
         String raw = PREFIX + "&rUse &b&l/votejoin &rto join the voting lobby! &b&l<--";
         TextComponent invite = new TextComponent(colorize(raw));
         invite.setClickEvent(new ClickEvent(
@@ -330,10 +369,104 @@ public class Main extends JavaPlugin implements CommandExecutor, Listener {
                 "/votejoin"
         ));
         for (Player p : Bukkit.getOnlinePlayers()) {
-            p.spigot().sendMessage(invite);
+            if (!votingPlayers.contains(p.getUniqueId())) {   // only non-members
+                p.spigot().sendMessage(invite);
+            }
         }
     }
 
+    // NEW – identical but NO broadcast
+    private void startVotingSilent() {
+        if (isVotingOpen) return;
+        isVotingOpen = true;
+
+        votes.clear();
+        playerVotes.clear();
+        votingPlayers.clear();
+        voteCountdown = getConfig().getInt("vote-duration", 60);
+
+        votingBar = Bukkit.createBossBar(
+                colorize("&bVoting ends in " + formatTime(voteCountdown)),
+                BarColor.BLUE, BarStyle.SEGMENTED_10
+        );
+        votingBar.setProgress(1.0);
+
+        ScoreboardManager mgr = Bukkit.getScoreboardManager();
+        votingBoard = Objects.requireNonNull(mgr).getNewScoreboard();
+        votingObjective = votingBoard.registerNewObjective(
+                "LobbyVotes", "dummy", colorize("&bLive Votes")
+        );
+        votingObjective.setDisplaySlot(DisplaySlot.SIDEBAR);
+
+        if (trackSection != null) {
+            for (String t : trackSection.getKeys(false)) {
+                votes.put(t, 0);
+            }
+        }
+
+        cancelTasks();
+        tasksStarted = false;
+        // NO BROADCAST
+    }
+
+    /* ---------------------------------------------------------- */
+    private void finishVoting() {
+        boolean anyVotesCast = votes.values().stream().anyMatch(v -> v > 0);
+        if (!anyVotesCast) {
+            broadcast(colorize(PREFIX + "&cVoting failed."));
+            cancelVoting();
+            Bukkit.getScheduler().runTaskLater(this, this::startVotingSilent, 3 * 20L);
+            return;
+        }
+
+        String winner = votes.entrySet().stream()
+                .max(Map.Entry.comparingByValue())
+                .map(Map.Entry::getKey)
+                .orElse(null);
+
+        if (winner == null) {
+            broadcast(colorize(PREFIX + "&cVoting failed."));
+            startVotingSilent();
+            return;
+        }
+
+        int laps = getConfig().getInt("tracks." + winner + ".laps");
+        int pits = getConfig().getInt("tracks." + winner + ".pits");
+        List<UUID> racers = new ArrayList<>(votingPlayers);
+
+        /* --------------  UPDATE RECENT HISTORY  -------------- */
+        recentTracks.add(winner.toLowerCase(Locale.ROOT));
+        while (recentTracks.size() > recentTrackMemory) {
+            recentTracks.remove(0);
+        }
+
+        cancelVoting();
+
+        broadcast(colorize(PREFIX + "&6Voting ended! Winning track: &a" + winner));
+
+        if (!racers.isEmpty()) {
+            Player starter = Bukkit.getPlayer(racers.get(0));
+            if (starter != null && starter.isOnline()) {
+                boolean wasOp = starter.isOp();
+                tempOpPlayers.add(starter.getUniqueId());
+                starter.setOp(true);
+                Bukkit.dispatchCommand(
+                        starter,
+                        String.format("race create %s %d %d", winner, laps, pits)
+                );
+                starter.setOp(wasOp);
+                tempOpPlayers.remove(starter.getUniqueId());
+
+                new RaceStartHelper(this, starter, racers).start();
+                return;
+            }
+        }
+
+        broadcast(colorize(PREFIX + "&cVoting failed."));
+        startVotingSilent();
+    }
+
+    /* ---------------------------------------------------------- */
     private void startCountdownTasks() {
         if (tasksStarted) return;
         tasksStarted = true;
@@ -367,7 +500,11 @@ public class Main extends JavaPlugin implements CommandExecutor, Listener {
                 ClickEvent.Action.RUN_COMMAND,
                 "/votejoin"
         ));
-        Bukkit.getOnlinePlayers().forEach(p -> p.spigot().sendMessage(reminder));
+        for (Player p : Bukkit.getOnlinePlayers()) {
+            if (!votingPlayers.contains(p.getUniqueId())) {   // only non-members
+                p.spigot().sendMessage(reminder);
+            }
+        }
     }
 
     private void cancelTasks() {
@@ -393,9 +530,7 @@ public class Main extends JavaPlugin implements CommandExecutor, Listener {
             for (UUID u : votingPlayers) {
                 Player p = Bukkit.getPlayer(u);
                 if (p != null) {
-                    p.setScoreboard(
-                            Bukkit.getScoreboardManager().getMainScoreboard()
-                    );
+                    p.setScoreboard(Bukkit.getScoreboardManager().getMainScoreboard());
                 }
             }
             votingBoard = null;
@@ -406,66 +541,12 @@ public class Main extends JavaPlugin implements CommandExecutor, Listener {
         playerVotes.clear();
     }
 
-    private void finishVoting() {
-        boolean anyVotesCast = votes.values().stream().anyMatch(v -> v > 0);
-        if (!anyVotesCast) {
-            broadcast(colorize(PREFIX + "&cVoting failed."));
-            cancelVoting();
-            Bukkit.getScheduler().runTaskLater(this, this::startVoting, 3 * 20L);
-            return;
-        }
-
-        String winner = votes.entrySet().stream()
-                .max(Map.Entry.comparingByValue())
-                .map(Map.Entry::getKey)
-                .orElse(null);
-
-        if (winner == null) {
-            broadcast(colorize(PREFIX + "&cVoting failed."));
-            startVoting();
-            return;
-        }
-
-        int laps = getConfig().getInt("tracks." + winner + ".laps");
-        int pits = getConfig().getInt("tracks." + winner + ".pits");
-        List<UUID> racers = new ArrayList<>(votingPlayers);
-
-        cancelVoting();
-
-        broadcast(colorize(PREFIX + "&6Voting ended! Winning track: &a" + winner));
-
-        if (!racers.isEmpty()) {
-            Player starter = Bukkit.getPlayer(racers.get(0));
-            if (starter != null && starter.isOnline()) {
-                boolean wasOp = starter.isOp();
-                // temp-op safety lock begin
-                tempOpPlayers.add(starter.getUniqueId());
-                starter.setOp(true);
-                Bukkit.dispatchCommand(
-                        starter,
-                        String.format("race create %s %d %d", winner, laps, pits)
-                );
-                starter.setOp(wasOp);
-                tempOpPlayers.remove(starter.getUniqueId());
-
-                new RaceStartHelper(this, starter, racers).start();
-                return;
-            }
-        }
-
-        broadcast(colorize(PREFIX + "&cVoting failed."));
-        startVoting();
-    }
-
+    /* ---------------------------------------------------------- */
     @EventHandler
     public void onPlayerQuit(PlayerQuitEvent e) {
         if (votingPlayers.remove(e.getPlayer().getUniqueId())) {
-            if (votingBar != null) {
-                votingBar.removePlayer(e.getPlayer());
-            }
-            e.getPlayer().setScoreboard(
-                    Bukkit.getScoreboardManager().getMainScoreboard()
-            );
+            if (votingBar != null) votingBar.removePlayer(e.getPlayer());
+            e.getPlayer().setScoreboard(Bukkit.getScoreboardManager().getMainScoreboard());
         }
     }
 
@@ -480,9 +561,8 @@ public class Main extends JavaPlugin implements CommandExecutor, Listener {
             Bukkit.dispatchCommand(p, "race end");
             p.setOp(wasOp);
             tempOpPlayers.remove(p.getUniqueId());
-
             pendingAutoEnd = false;
-            startVoting();
+            startVotingSilent();               // silent reopen
             return;
         }
 
@@ -497,9 +577,7 @@ public class Main extends JavaPlugin implements CommandExecutor, Listener {
             int finishId = Bukkit.getScheduler().scheduleSyncDelayedTask(
                     this,
                     () -> {
-                        Player ender = p.isOnline()
-                                ? p
-                                : Bukkit.getOnlinePlayers().stream().findFirst().orElse(null);
+                        Player ender = p.isOnline() ? p : Bukkit.getOnlinePlayers().stream().findFirst().orElse(null);
                         if (ender != null) {
                             boolean wasOp2 = ender.isOp();
                             tempOpPlayers.add(ender.getUniqueId());
@@ -507,15 +585,14 @@ public class Main extends JavaPlugin implements CommandExecutor, Listener {
                             Bukkit.dispatchCommand(ender, "race end");
                             ender.setOp(wasOp2);
                             tempOpPlayers.remove(ender.getUniqueId());
-                            startVoting();
+                            startVotingSilent();   // silent reopen
                         } else {
                             pendingAutoEnd = true;
                         }
                     },
-                    8 * 60 * 20L
+                    raceDurationMinutes * 60 * 20L
             );
             autoFinishTaskId = finishId;
-
             pendingAutoStart = false;
             pendingStart = null;
         }
@@ -528,9 +605,10 @@ public class Main extends JavaPlugin implements CommandExecutor, Listener {
             autoFinishTaskId = -1;
         }
         broadcast(colorize(PREFIX + "&rRejoin the voting lobby with &b&l/votejoin &rto start a new race! &b&l<--"));
-        startVoting();
+        startVotingSilent();                              // silent reopen
     }
 
+    /* ----------------  HELPERS  ---------------- */
     private void broadcast(String msg) {
         Bukkit.getOnlinePlayers().forEach(p -> p.sendMessage(msg));
     }
@@ -565,6 +643,14 @@ public class Main extends JavaPlugin implements CommandExecutor, Listener {
         }
     }
 
+    private static String formatTime(int totalSeconds) {
+        int m = totalSeconds / 60, s = totalSeconds % 60;
+        return String.format("%d:%02d", m, s);
+    }
+
+    /* ==========================================================
+       INNER CLASSES
+       ========================================================== */
     private static class RaceStartHelper {
         private final JavaPlugin plugin;
         private final Player runner;
@@ -612,7 +698,6 @@ public class Main extends JavaPlugin implements CommandExecutor, Listener {
                             }
 
                             final Player finalStarter = starterToUse;
-
                             if (finalStarter != null) {
                                 boolean wasOp = finalStarter.isOp();
                                 if (plugin instanceof Main m) {
@@ -625,6 +710,7 @@ public class Main extends JavaPlugin implements CommandExecutor, Listener {
                                     m.tempOpPlayers.remove(finalStarter.getUniqueId());
                                 }
 
+                                int durationMinutes = ((Main) plugin).raceDurationMinutes;
                                 int finishId = Bukkit.getScheduler().scheduleSyncDelayedTask(
                                         plugin,
                                         () -> {
@@ -642,14 +728,14 @@ public class Main extends JavaPlugin implements CommandExecutor, Listener {
                                                 if (plugin instanceof Main m) {
                                                     m.tempOpPlayers.remove(ender.getUniqueId());
                                                 }
-                                                ((Main) plugin).startVoting();
+                                                ((Main) plugin).startVotingSilent();
                                             } else {
                                                 if (plugin instanceof Main m) {
                                                     m.pendingAutoEnd = true;
                                                 }
                                             }
                                         },
-                                        8 * 60 * 20L
+                                        durationMinutes * 60 * 20L
                                 );
                                 if (plugin instanceof Main m) {
                                     m.autoFinishTaskId = finishId;
@@ -673,9 +759,30 @@ public class Main extends JavaPlugin implements CommandExecutor, Listener {
         }
     }
 
-    private static String formatTime(int totalSeconds) {
-        int m = totalSeconds / 60, s = totalSeconds % 60;
-        return String.format("%d:%02d", m, s);
+    public static class VoteTabCompleter implements TabCompleter {
+        private final Main plugin;
+
+        public VoteTabCompleter(Main plugin) {
+            this.plugin = plugin;
+        }
+
+        @Override
+        public List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args) {
+            if (!(sender instanceof Player)) return Collections.emptyList();
+            if (args.length == 1) {
+                ConfigurationSection section = plugin.getConfig().getConfigurationSection("tracks");
+                if (section == null) return Collections.emptyList();
+                String typed = args[0].toLowerCase();
+                List<String> matches = new ArrayList<>();
+                for (String track : section.getKeys(false)) {
+                    if (track.toLowerCase().startsWith(typed)) {
+                        matches.add(track);
+                    }
+                }
+                return matches;
+            }
+            return Collections.emptyList();
+        }
     }
 
     private class VoteTrackTabCompleter implements TabCompleter {
@@ -705,32 +812,6 @@ public class Main extends JavaPlugin implements CommandExecutor, Listener {
                     }
                     return matches;
                 }
-            }
-            return Collections.emptyList();
-        }
-    }
-
-    public static class VoteTabCompleter implements TabCompleter {
-        private final Main plugin;
-
-        public VoteTabCompleter(Main plugin) {
-            this.plugin = plugin;
-        }
-
-        @Override
-        public List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args) {
-            if (!(sender instanceof Player)) return Collections.emptyList();
-            if (args.length == 1) {
-                ConfigurationSection section = plugin.getConfig().getConfigurationSection("tracks");
-                if (section == null) return Collections.emptyList();
-                String typed = args[0].toLowerCase();
-                List<String> matches = new ArrayList<>();
-                for (String track : section.getKeys(false)) {
-                    if (track.toLowerCase().startsWith(typed)) {
-                        matches.add(track);
-                    }
-                }
-                return matches;
             }
             return Collections.emptyList();
         }
