@@ -4,6 +4,15 @@ lobby:
   y: -1.0 # insert the y coordinates of the voting area here
   z: 19.0 # insert the z coordinates of the voting area here
 
+# Seconds a player must wait between votes
+vote-cooldown-seconds: 3
+
+# How many past races a track is blocked from being voted again
+recent-track-memory: 2
+
+# How many minutes until the automatic "/race end" after "/race start"
+race-duration-minutes: 8
+
 tracks: # insert set tracks that can be voted for here
 # <TrackName>:
 #   laps: <num>
