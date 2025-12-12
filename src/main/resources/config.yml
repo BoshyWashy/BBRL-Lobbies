@@ -10,10 +10,21 @@ vote-cooldown-seconds: 3
 # How many past races a track is blocked from being voted again
 recent-track-memory: 2
 
-# How many minutes until the automatic "/race end" after "/race start"
+# How many minutes until the automatic baseline end for lobby races
+# This is overridden by the "race-end-override-seconds" once the first finisher is detected
 race-duration-minutes: 8
+
+# How long the join window stays open for /voterace (seconds)
+race-join-window-seconds: 30
+
+# After the first finisher, show a red bossbar countdown and end the heat after X seconds
+race-end-override-seconds: 120
+
+# End the heat early if this percentage of participants have finished (0-100)
+race-auto-end-percent: 50
 
 tracks: # insert set tracks that can be voted for here
 # <TrackName>:
 #   laps: <num>
 #   pits: <num>
+#   item: <Material>   (optional – defaults to PAPER)
