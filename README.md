@@ -7,15 +7,18 @@ Lobby system for the Builders & Boaters Racing League (BBRL) server
 - Place the latest release .jar file into your plugins folder
 - With the plugin installed, use /votetrack add (Exact name of the track, no spaces) (laps) (pits)
 - If you dont want players to race during an event, use /votelobby close to disable it, and /votelobby open to enable it again
+- Ensure you have no events in timing system called "Racing" otherwise the plugin will not work.
 
 # Features:
 - Voting System for all players to join and vote what tracks they want
 - Specific tracks to be raced on listed in config with a set amount of laps and pits and edited in /votetrack add
 - Coordinates in config for where the voting area is
-- 8 minute maximum timer for each quickrace
+- Customisable timer for the maximum time a race can go on for
+- Prevention from voting the same tracks in a row with that number customisable in config
 - Permission "bbrl.admin" to open, close, the votelobby, and to add and remove tracks from the selection of tracks.
 
 # Commands:
+- /voterace - Joins the quickrace 
 - /votejoin - Accessible to anyone, joins votelobby
 - /voteleave - Accessible to anyone, leaves votelobby
 - /votelobby <open|close> - Opens/Closes the votelobby, useful for during events
