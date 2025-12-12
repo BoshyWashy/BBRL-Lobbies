@@ -24,3 +24,5 @@ Lobby system for the Builders & Boaters Racing League (BBRL) server
 - /votelobby <open|close> - Opens/Closes the votelobby, useful for during events
 - /votetrack add <trackname> <laps> <pits> - Adds a track to the voting selection
 - /votetrack remove <trackname> - Removes a track from the voting selection
+- /votetrack item <trackname> - Adds an item for the specific track in the voting gui
+- /vote - opens the voting gui
