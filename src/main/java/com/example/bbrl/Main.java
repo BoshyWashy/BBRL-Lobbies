@@ -11,8 +11,10 @@ import me.makkuusen.timing.system.participant.DriverState;
 import me.makkuusen.timing.system.round.Round;
 import me.makkuusen.timing.system.round.RoundType;
 import me.makkuusen.timing.system.track.Track;
+
 import net.md_5.bungee.api.chat.ClickEvent;
 import net.md_5.bungee.api.chat.TextComponent;
+
 import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
 import org.bukkit.Location;
@@ -99,7 +101,9 @@ public class Main extends JavaPlugin implements CommandExecutor, Listener {
     private final Set<UUID> lobbyJoinedPlayers = new HashSet<>();
 
     private int preRaceCountdownTaskId = -1;
-    private int preRaceCountdownSeconds = 45;
+    private int preRaceCountdownSeconds;
+    private int raceStartCountdownSeconds;
+    private int overrideTimerTaskId = -1;
 
     private long autoFinishScheduledAt = -1L;
 
@@ -131,6 +135,8 @@ public class Main extends JavaPlugin implements CommandExecutor, Listener {
         int joinWindowSecs  = getConfig().getInt("race-join-window-seconds", 30);
         overrideSeconds     = getConfig().getInt("race-end-override-seconds", 60);
         autoEndPercent      = Math.max(0, Math.min(100, getConfig().getInt("race-auto-end-percent", 80)));
+        preRaceCountdownSeconds = getConfig().getInt("pre-race-countdown-seconds", 40);
+        raceStartCountdownSeconds = getConfig().getInt("race-start-countdown-seconds", 5);
 
         PluginCommand joinCmd = Objects.requireNonNull(getCommand("votejoin"));
         joinCmd.setExecutor(this);
@@ -696,18 +702,14 @@ public class Main extends JavaPlugin implements CommandExecutor, Listener {
         }
         sendClickableJoinMessage(winner);
         raceJoinOpen = true;
+        startPreRaceCountdown(); // START IMMEDIATELY WHEN JOINING OPENS
         int joinWindowSecs = getConfig().getInt("race-join-window-seconds", 30);
         if (joinWindowTaskId != -1) Bukkit.getScheduler().cancelTask(joinWindowTaskId);
-        startPreRaceCountdown();
         joinWindowTaskId = Bukkit.getScheduler().scheduleSyncDelayedTask(this, () -> {
             raceJoinOpen = false;
-            if (lobbyHeat != null) {
-                getLogger().info("[BBRL-Lobby] Starting countdown for heat " + lobbyHeat.getHeatNumber()
-                        + " with " + lobbyHeat.getDrivers().size() + " drivers.");
-                Bukkit.getScheduler().runTaskLater(this, () -> {
-                    if (lobbyHeat != null) lobbyHeat.startCountdown(10);
-                }, 20L);
-            }
+            if (lobbyHeat == null) return;
+            getLogger().info("[BBRL-Lobby] Join window closed for heat " + lobbyHeat.getHeatNumber()
+                    + ". Drivers: " + lobbyHeat.getDrivers().size());
         }, joinWindowSecs * 20L);
         if (autoFinishTaskId != -1) Bukkit.getScheduler().cancelTask(autoFinishTaskId);
         autoFinishScheduledAt = System.currentTimeMillis();
@@ -827,10 +829,12 @@ public class Main extends JavaPlugin implements CommandExecutor, Listener {
         final Round roundRef = lobbyRound;
         final Event eventRef = lobbyEvent;
         if (heatRef == null || roundRef == null || eventRef == null) {
-            cleanupLobbyOwnedEvent(); startVotingSilent(); return;
+            cleanupLobbyOwnedEvent(); startVoting(); return;
         }
         try {
-            heatRef.finishHeat();
+            if (heatRef.getHeatState() != HeatState.FINISHED) {
+                heatRef.finishHeat();
+            }
             Bukkit.getScheduler().runTaskLater(this, () -> {
                 try { roundRef.finish(eventRef); } catch (Exception ex) {
                     getLogger().warning("Failed to finish round: " + ex.getMessage());
@@ -845,13 +849,47 @@ public class Main extends JavaPlugin implements CommandExecutor, Listener {
                 try { EventDatabase.removeEventHard(eventRef); } catch (Exception ex) {
                     getLogger().warning("Failed to remove event: " + ex.getMessage());
                 } finally {
-                    cleanupLobbyOwnedEvent(); startVotingSilent();
+                    cleanupLobbyOwnedEvent(); startVoting();
                 }
             }, 60L);
         } catch (Exception e) {
             getLogger().warning("Failed to end lobby-owned race cleanly: " + e.getMessage());
-            cleanupLobbyOwnedEvent(); startVotingSilent();
+            cleanupLobbyOwnedEvent(); startVoting();
         }
+    }
+
+    private void abortEmptyRace() {
+        final Heat heatRef = lobbyHeat;
+        final Round roundRef = lobbyRound;
+        final Event eventRef = lobbyEvent;
+        if (heatRef == null || roundRef == null || eventRef == null) {
+            cleanupLobbyOwnedEvent(); startVoting(); return;
+        }
+        getLogger().info("[BBRL-Lobby] Aborting race with no drivers.");
+        try {
+            if (heatRef.getHeatState() != HeatState.FINISHED) {
+                heatRef.finishHeat();
+            }
+        } catch (Exception e) {
+            getLogger().warning("finishHeat() on empty race threw: " + e.getMessage());
+        }
+        Bukkit.getScheduler().runTaskLater(this, () -> {
+            try { roundRef.finish(eventRef); } catch (Exception ex) {
+                getLogger().warning("Failed to finish round on abort: " + ex.getMessage());
+            }
+        }, 20L);
+        Bukkit.getScheduler().runTaskLater(this, () -> {
+            try { eventRef.finish(); } catch (Exception ex) {
+                getLogger().warning("Failed to finish event on abort: " + ex.getMessage());
+            }
+        }, 40L);
+        Bukkit.getScheduler().runTaskLater(this, () -> {
+            try { EventDatabase.removeEventHard(eventRef); } catch (Exception ex) {
+                getLogger().warning("Failed to remove event on abort: " + ex.getMessage());
+            } finally {
+                cleanupLobbyOwnedEvent(); startVoting();
+            }
+        }, 60L);
     }
 
     private void cleanupLobbyOwnedEvent() {
@@ -859,6 +897,7 @@ public class Main extends JavaPlugin implements CommandExecutor, Listener {
         if (joinWindowTaskId != -1) { Bukkit.getScheduler().cancelTask(joinWindowTaskId); joinWindowTaskId = -1; }
         if (autoFinishTaskId != -1) { Bukkit.getScheduler().cancelTask(autoFinishTaskId); autoFinishTaskId = -1; }
         if (preRaceCountdownTaskId != -1) { Bukkit.getScheduler().cancelTask(preRaceCountdownTaskId); preRaceCountdownTaskId = -1; }
+        if (overrideTimerTaskId != -1) { Bukkit.getScheduler().cancelTask(overrideTimerTaskId); overrideTimerTaskId = -1; }
         overrideTimerArmed = false;
         if (raceEndOverrideBar != null) { raceEndOverrideBar.removeAll(); raceEndOverrideBar = null; }
         lobbyJoinedPlayers.clear();
@@ -979,42 +1018,60 @@ public class Main extends JavaPlugin implements CommandExecutor, Listener {
             int tid = Bukkit.getScheduler().scheduleSyncRepeatingTask(this, () -> {
                 int t = timeLeft.decrementAndGet();
                 if (t <= 0) {
-                    raceEndOverrideBar.removeAll();
+                    if (raceEndOverrideBar != null) {
+                        raceEndOverrideBar.removeAll();
+                        raceEndOverrideBar = null;
+                    }
                     Bukkit.getScheduler().cancelTask(taskRef.get());
                     if (lobbyHeat != null) lobbyHeat.finishHeat();
                 } else {
-                    raceEndOverrideBar.setProgress(Math.max(0.0, (double) t / overrideSeconds));
-                    raceEndOverrideBar.setTitle(ChatColor.RED + "Race ends in " + t + " seconds");
+                    if (raceEndOverrideBar != null) {
+                        raceEndOverrideBar.setProgress(Math.max(0.0, (double) t / overrideSeconds));
+                        raceEndOverrideBar.setTitle(ChatColor.RED + "Race ends in " + t + " seconds");
+                    }
                 }
             }, 20L, 20L);
             taskRef.set(tid);
+            overrideTimerTaskId = tid;
         }
     }
 
-    /*  FIXED COUNTDOWN – runs to 0 then hands over to Timing-System  */
     private void startPreRaceCountdown() {
-        if (preRaceCountdownTaskId != 5) Bukkit.getScheduler().cancelTask(preRaceCountdownTaskId);
-        preRaceCountdownSeconds = 40;
+        if (preRaceCountdownTaskId != -1) Bukkit.getScheduler().cancelTask(preRaceCountdownTaskId);
+        if (lobbyHeat == null) return;
+        if (preRaceCountdownSeconds <= 0) {
+            if (lobbyHeat.getDrivers().isEmpty()) {
+                abortEmptyRace();
+            } else {
+                lobbyHeat.startCountdown(raceStartCountdownSeconds);
+            }
+            return;
+        }
+        AtomicInteger countdown = new AtomicInteger(preRaceCountdownSeconds);
         preRaceCountdownTaskId = Bukkit.getScheduler().scheduleSyncRepeatingTask(this, () -> {
             if (lobbyHeat == null) {
                 Bukkit.getScheduler().cancelTask(preRaceCountdownTaskId);
-                preRaceCountdownTaskId = 5; return;
+                preRaceCountdownTaskId = -1;
+                return;
             }
-            for (UUID uuid : lobbyJoinedPlayers) {
-                Player pl = Bukkit.getPlayer(uuid);
-                if (pl != null && pl.isOnline()) {
-                    boolean actuallyInThisHeat = lobbyHeat.getDrivers().values().stream()
-                            .anyMatch(d -> d.getTPlayer().getUniqueId().equals(uuid));
-                    if (!actuallyInThisHeat) continue;
-                    pl.sendTitle(ChatColor.WHITE.toString() + preRaceCountdownSeconds, "", 0, 20, 0);
-                }
-            }
-            preRaceCountdownSeconds--;
-            /*  CHANGE:  keep counting until 0, THEN start Timing-System countdown  */
-            if (preRaceCountdownSeconds < 5) {
+            int current = countdown.getAndDecrement();
+            if (current <= raceStartCountdownSeconds) {
                 Bukkit.getScheduler().cancelTask(preRaceCountdownTaskId);
-                preRaceCountdownTaskId = 5;
-                if (lobbyHeat != null) lobbyHeat.startCountdown(5);
+                preRaceCountdownTaskId = -1;
+                if (lobbyHeat != null) {
+                    if (lobbyHeat.getDrivers().isEmpty()) {
+                        abortEmptyRace();
+                    } else {
+                        lobbyHeat.startCountdown(raceStartCountdownSeconds);
+                    }
+                }
+                return;
+            }
+            for (var driver : lobbyHeat.getDrivers().values()) {
+                Player pl = driver.getTPlayer().getPlayer();
+                if (pl != null && pl.isOnline()) {
+                    pl.sendTitle("", ChatColor.WHITE.toString() + current, 0, 20, 0);
+                }
             }
         }, 20L, 20L);
     }
