@@ -1,8 +1,8 @@
 lobby:
-  world: baot # insert the world where you want players to be teleported to in
-  x: 50044.0 # insert the x coordinates of the voting area here
-  y: -1.0 # insert the y coordinates of the voting area here
-  z: 19.0 # insert the z coordinates of the voting area here
+  world: <world> # insert the world where you want players to be teleported to in
+  x: <x> # insert the x coordinates of the voting area here
+  y: <y> # insert the y coordinates of the voting area here
+  z: <z> # insert the z coordinates of the voting area here
 
 # Seconds a player must wait between votes
 vote-cooldown-seconds: 3
@@ -23,8 +23,14 @@ race-end-override-seconds: 120
 # End the heat early if this percentage of participants have finished (0-100)
 race-auto-end-percent: 50
 
+# How many seconds the pre-race title countdown lasts before TimingSystem takes over (players can join the race here)
+pre-race-countdown-seconds: 40
+
+# How many seconds TimingSystem counts down for the actual race start (players cannot join the race here)
+race-start-countdown-seconds: 5
+
 tracks: # insert set tracks that can be voted for here
 # <TrackName>:
 #   laps: <num>
 #   pits: <num>
-#   item: <Material>   (optional – defaults to PAPER)
+#   item: <Material> (optional – defaults to PAPER)
