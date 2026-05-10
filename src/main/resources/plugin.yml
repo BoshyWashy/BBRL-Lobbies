@@ -3,7 +3,7 @@ main: com.example.bbrl.Main
 version: 3.1
 api-version: "1.20"
 depend: [TimingSystem]
-description: A lobby system made for the Builders and Boaters Racing Server - now with GUI voting!
+description: A lobby system made for the Builders and Boaters Racing Server
 author: BoshyWashy and allied_galaxy7
 
 commands:
